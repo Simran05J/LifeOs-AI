@@ -19,18 +19,32 @@ class GeminiClient:
         """
         Send a prompt to Gemini and return the generated text response.
 
+        Deprecated: Use generate() instead.
+        """
+        return await self.generate(prompt)
+
+    async def generate(self, prompt: str) -> str:
+        """
+        Asynchronously send a prompt to the Google Gemini API and return the response.
+
         Args:
-            prompt: The plain-text prompt to send to the model.
+            prompt: The text prompt to be evaluated by the model.
 
         Returns:
-            The model's text response as a string.
+            The trimmed text response from the model.
 
         Raises:
-            AgentExecutionError: If the Gemini API call fails for any reason.
+            AgentExecutionError: If the prompt is empty or the Gemini API call fails.
         """
+        if not prompt or not prompt.strip():
+            raise AgentExecutionError("Prompt cannot be empty.")
+
+        cleaned_prompt = prompt.strip()
         try:
-            response = await self._model.generate_content_async(prompt)
-            return response.text
+            response = await self._model.generate_content_async(cleaned_prompt)
+            if not response or not response.text:
+                raise AgentExecutionError("Received empty response from Gemini.")
+            return response.text.strip()
         except Exception as exc:
             raise AgentExecutionError(
                 f"Gemini API call failed: {exc}"
