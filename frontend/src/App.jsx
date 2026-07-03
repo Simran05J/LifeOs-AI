@@ -1,10 +1,25 @@
-import { useState, useEffect, useRef } from 'react';
+/**
+ * LifeOS AI — App Root with React Router
+ *
+ * Routes:
+ *   /login  → Login page (Google Sign-In)
+ *   /       → Dashboard (protected — redirects to /login if no token)
+ *
+ * A lightweight ProtectedRoute wrapper checks localStorage for the Firebase
+ * ID token. Real token validation happens on the backend; this guard just
+ * prevents an unauthenticated user from accidentally landing on the dashboard.
+ */
+
+import { useState } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import AppLayout from './layouts/AppLayout';
+import Chat from './components/Chat/Chat';
+import Login from './pages/Login/Login';
+import { getStoredToken } from './services/authService';
 import {
-  Mic,
   RotateCw,
   MoreHorizontal,
-  Send,
+  Mic,
   PlusCircle,
   Bell,
   DollarSign,
@@ -13,84 +28,25 @@ import {
   Sparkles,
 } from 'lucide-react';
 
-function App() {
-  const [messages, setMessages] = useState([
-    { id: 1, sender: 'assistant', text: 'Hello Sheetal 👋', time: '10:30 AM' },
-    { id: 2, sender: 'assistant', text: 'How can I help you today?', time: '10:30 AM' },
-    { id: 3, sender: 'user', text: 'Help me plan my day and keep track of reminders.', time: '10:31 AM' },
-    { id: 4, sender: 'assistant', text: "I'd be happy to help you plan your day and manage your reminders!", time: '10:31 AM' },
-  ]);
-  const [inputVal, setInputVal] = useState('');
-  const messagesEndRef = useRef(null);
+// ---------------------------------------------------------------------------
+// ProtectedRoute
+// ---------------------------------------------------------------------------
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+function ProtectedRoute({ children }) {
+  const hasToken = Boolean(getStoredToken());
+  if (!hasToken) {
+    return <Navigate to="/login" replace />;
+  }
+  return children;
+}
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+// ---------------------------------------------------------------------------
+// Dashboard — extracted from the original App body (unchanged)
+// ---------------------------------------------------------------------------
 
-  const handleSend = (e) => {
-    e?.preventDefault();
-    const trimmed = inputVal.trim();
-    if (!trimmed) return;
-
-    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const userMsg = {
-      id: Date.now(),
-      sender: 'user',
-      text: trimmed,
-      time,
-    };
-
-    setMessages((prev) => [...prev, userMsg]);
-    setInputVal('');
-
-    // Mock AI reply after 800ms
-    setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now() + 1,
-          sender: 'assistant',
-          text: `I'm processing "${trimmed}"... Let me know how else I can assist.`,
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        },
-      ]);
-    }, 800);
-  };
-
-  const handlePromptClick = (prompt) => {
-    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const userMsg = {
-      id: Date.now(),
-      sender: 'user',
-      text: prompt,
-      time,
-    };
-
-    setMessages((prev) => [...prev, userMsg]);
-
-    setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now() + 1,
-          sender: 'assistant',
-          text: `Analyzing info for "${prompt}"... Ready to configure details.`,
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        },
-      ]);
-    }, 800);
-  };
-
-  const handleRefresh = () => {
-    setMessages([
-      { id: 1, sender: 'assistant', text: 'Hello Sheetal 👋', time: '10:30 AM' },
-      { id: 2, sender: 'assistant', text: 'How can I help you today?', time: '10:30 AM' },
-    ]);
-  };
+function Dashboard() {
+  const [chatKey, setChatKey] = useState(0);
+  const handleRefresh = () => setChatKey((k) => k + 1);
 
   const quickActions = [
     { title: 'Add Task', icon: PlusCircle },
@@ -98,7 +54,7 @@ function App() {
     { title: 'Log Expense', icon: DollarSign },
     { title: 'Plan Trip', icon: Compass },
     { title: 'Health Tracker', icon: Heart },
-    { title: 'Ask AI', icon: Sparkles, action: () => handlePromptClick('Help me optimize my schedule') },
+    { title: 'Ask AI', icon: Sparkles },
   ];
 
   return (
@@ -115,7 +71,7 @@ function App() {
             </p>
           </div>
 
-          {/* 2. AI Assistant Panel */}
+          {/* 2. AI Assistant Panel — powered by Chat component → POST /api/v1/chat */}
           <div className="rounded-[28px] border border-white/10 bg-slate-950/70 p-6 flex flex-col h-[520px] shadow-glow backdrop-blur-xl">
             {/* Header */}
             <div className="flex items-center justify-between border-b border-white/5 pb-4 mb-4 select-none">
@@ -149,72 +105,8 @@ function App() {
               </div>
             </div>
 
-            {/* Conversation Area */}
-            <div className="flex-1 overflow-y-auto space-y-4 mb-4 pr-1 scrollbar-thin">
-              {messages.map((msg) => {
-                const isAssistant = msg.sender === 'assistant';
-                return (
-                  <div
-                    key={msg.id}
-                    className={`flex flex-col ${isAssistant ? 'items-start' : 'items-end'}`}
-                  >
-                    <div
-                      className={`px-4 py-2.5 rounded-2xl text-sm ${
-                        isAssistant
-                          ? 'bg-white/5 border border-white/5 text-slate-200 rounded-tl-sm'
-                          : 'bg-violet-600/25 border border-violet-500/35 text-violet-100 rounded-tr-sm'
-                      }`}
-                    >
-                      {msg.text}
-                    </div>
-                    <span className="text-[10px] text-slate-500 mt-1 px-1">
-                      {msg.time}
-                    </span>
-                  </div>
-                );
-              })}
-              <div ref={messagesEndRef} />
-            </div>
-
-            {/* Suggested Prompts */}
-            <div className="flex flex-wrap gap-2 mb-4 select-none">
-              {['Plan my day', 'Show reminders', "Today's schedule", 'Focus mode'].map((prompt) => (
-                <button
-                  key={prompt}
-                  type="button"
-                  onClick={() => handlePromptClick(prompt)}
-                  className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300 hover:border-violet-500/30 hover:bg-violet-500/10 hover:text-violet-200 transition-all duration-200 hover:-translate-y-0.5 outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50"
-                >
-                  {prompt}
-                </button>
-              ))}
-            </div>
-
-            {/* Input Composer */}
-            <form onSubmit={handleSend} className="relative flex items-center">
-              <button
-                type="button"
-                aria-label="Start voice typing"
-                className="absolute left-4 text-slate-400 hover:text-violet-400 transition cursor-pointer"
-              >
-                <Mic size={16} />
-              </button>
-              <input
-                type="text"
-                value={inputVal}
-                onChange={(e) => setInputVal(e.target.value)}
-                placeholder="Ask me anything..."
-                aria-label="Message text"
-                className="w-full h-11 pl-11 pr-11 rounded-full bg-slate-900/90 border border-white/5 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-500/80 focus:ring-2 focus:ring-violet-500/20 transition-all duration-200"
-              />
-              <button
-                type="submit"
-                aria-label="Send message"
-                className="absolute right-4 text-violet-400 hover:text-violet-300 transition cursor-pointer"
-              >
-                <Send size={16} />
-              </button>
-            </form>
+            {/* Live Chat — replaces the mock setTimeout handler */}
+            <Chat key={chatKey} />
           </div>
 
           {/* 3. Workspace Overview */}
@@ -284,7 +176,6 @@ function App() {
                   <button
                     key={act.title}
                     type="button"
-                    onClick={act.action || (() => handlePromptClick(`Execute: ${act.title}`))}
                     aria-label={act.title}
                     className="flex flex-col items-start p-4 rounded-[20px] border border-white/10 bg-slate-900/40 hover:bg-white/5 hover:border-violet-500/30 transition-all duration-200 hover:-translate-y-1 group focus-visible:ring-2 focus-visible:ring-violet-500/50 outline-none text-left"
                   >
@@ -300,6 +191,32 @@ function App() {
         </div>
       </div>
     </AppLayout>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// App root — routing only
+// ---------------------------------------------------------------------------
+
+function App() {
+  return (
+    <Routes>
+      {/* Public route */}
+      <Route path="/login" element={<Login />} />
+
+      {/* Protected dashboard */}
+      <Route
+        path="/"
+        element={
+          <ProtectedRoute>
+            <Dashboard />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Catch-all → login */}
+      <Route path="*" element={<Navigate to="/login" replace />} />
+    </Routes>
   );
 }
 
