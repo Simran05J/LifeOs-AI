@@ -41,6 +41,9 @@ class ReminderService:
             else:
                 raise ValueError("Unsupported request format.")
 
+            # Extract conversation history before Pydantic validation
+            conversation_history: list[dict] = payload.pop("conversation_history", []) or []
+
             validated_request = ReminderRequest(**payload)
         except Exception as exc:
             raise AgentValidationError(f"Invalid reminder request: {exc}") from exc
@@ -64,8 +67,13 @@ class ReminderService:
         )
 
         try:
-            # Delegate AI reasoning to AIReasoningEngine
-            raw_response = await self.reasoning_engine.reason(prompt)
+            # Delegate AI reasoning — history-aware when session history is present
+            if conversation_history:
+                raw_response = await self.reasoning_engine.reason_with_history(
+                    prompt, conversation_history
+                )
+            else:
+                raw_response = await self.reasoning_engine.reason(prompt)
 
             # Clean and parse the JSON response
             json_text = raw_response.strip()

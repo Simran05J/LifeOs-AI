@@ -19,6 +19,10 @@ class PlannerService:
         Coordinates planner processing to generate a plan based on the request.
         Validates the request, constructs the prompt, calls the AI reasoning engine,
         and wraps the response in a PlannerResult object.
+
+        When ``conversation_history`` is present in the payload the engine is called
+        with history so the model can resolve references to prior turns (e.g.
+        "Move it to 7 PM" after "Add a gym session at 6 PM").
         """
         # Validate request and support backward compatibility
         try:
@@ -28,6 +32,10 @@ class PlannerService:
                 payload = request
             else:
                 raise ValueError("Unsupported request format.")
+
+            # Extract conversation history before Pydantic validation
+            # (it is not part of PlannerRequest and would cause a validation error)
+            conversation_history: list[dict] = payload.pop("conversation_history", []) or []
 
             validated_request = NewPlannerRequest(**payload)
         except Exception as exc:
@@ -48,8 +56,13 @@ class PlannerService:
             f"Existing Tasks:\n{existing_tasks_str}\n"
         )
 
-        # Call AIReasoningEngine
-        raw_response = await self.reasoning_engine.reason(prompt)
+        # Call AIReasoningEngine — use history-aware path when history is available
+        if conversation_history:
+            raw_response = await self.reasoning_engine.reason_with_history(
+                prompt, conversation_history
+            )
+        else:
+            raw_response = await self.reasoning_engine.reason(prompt)
 
         # Convert the response into a PlannerResult object
         return PlannerResult(

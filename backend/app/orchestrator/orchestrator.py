@@ -7,6 +7,7 @@ from app.agents.reminder.reminder_agent import ReminderAgent
 from app.agents.finance.finance_agent import FinanceAgent
 from app.agents.travel.travel_agent import TravelAgent
 from app.agents.wellness.wellness_agent import WellnessAgent
+from app.ai.reasoning_engine import AIReasoningEngine
 from app.config.constants import (
     AGENT_PLANNER,
     AGENT_REMINDER,
@@ -16,6 +17,9 @@ from app.config.constants import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Sentinel constant for the general-purpose fallback path
+_AGENT_GENERAL = "general"
 
 
 class AntigravityOrchestrator:
@@ -27,7 +31,8 @@ class AntigravityOrchestrator:
     def __init__(self) -> None:
         """
         Initialize the orchestrator and populate the private agent registry.
-        Instantiates exactly one instance of each agent.
+        Instantiates exactly one instance of each agent and one AIReasoningEngine
+        for the general-purpose fallback path.
         """
         self.__registry: dict[str, BaseAgent] = {
             AGENT_PLANNER: PlannerAgent(),
@@ -36,6 +41,8 @@ class AntigravityOrchestrator:
             AGENT_TRAVEL: TravelAgent(),
             AGENT_WELLNESS: WellnessAgent(),
         }
+        # General-purpose fallback — used when no domain keyword is matched
+        self._reasoning_engine = AIReasoningEngine()
 
         # Deterministic keyword mapping for rule-based routing
         self._keyword_map: dict[str, list[str]] = {
@@ -108,9 +115,11 @@ class AntigravityOrchestrator:
                     break  # Stop checking keywords for this agent once matched
 
         if not matched_agents:
-            raise AgentExecutionError(
-                "Unable to determine agent intent from the query. No keywords matched."
+            logger.info(
+                "No domain keywords matched for query '%s' — general fallback will be used.",
+                query[:80],
             )
+            return []  # Empty list signals the general fallback path
 
         logger.info("Detected intents: %s", matched_agents)
         return matched_agents
@@ -173,10 +182,81 @@ class AntigravityOrchestrator:
 
         return collected
 
+    async def _handle_general_query(self, request: AgentRequest) -> AgentResponse:
+        """
+        Fallback handler for queries that do not match any specialist agent's keyword list.
+        Uses the AIReasoningEngine directly to produce a helpful conversational response.
+        Only the Orchestrator may invoke this — no agent calls another agent.
+
+        Args:
+            request: Standardized agent request containing metadata and payload.
+
+        Returns:
+            A standardized AgentResponse wrapping the AI's reply.
+
+        Raises:
+            AgentExecutionError: If the reasoning engine itself fails.
+        """
+        payload = request.payload or {}
+        query = payload.get("query", "")
+        conversation_history: list[dict] = payload.get("conversation_history", []) or []
+
+        system_context = (
+            "You are LifeOS AI, a personal life operating system assistant. "
+            "You help users with planning, reminders, budgeting, travel, wellness, and productivity. "
+            "Be helpful, concise, and friendly. "
+            "If the user's request falls within one of your specialist domains "
+            "(planning, reminders, finance, travel, wellness), gently guide them "
+            "to phrase their request so you can use the right tool."
+        )
+        full_prompt = f"{system_context}\n\nUser: {query}"
+
+        try:
+            if conversation_history:
+                raw_response = await self._reasoning_engine.reason_with_history(
+                    full_prompt, conversation_history
+                )
+            else:
+                raw_response = await self._reasoning_engine.reason(full_prompt)
+        except Exception as exc:
+            raise AgentExecutionError(
+                f"General fallback reasoning failed: {exc}"
+            ) from exc
+
+        return AgentResponse(
+            success=True,
+            agent=_AGENT_GENERAL,
+            data={"summary": raw_response},
+            message=raw_response,
+        )
+
+    async def execute(self, request: AgentRequest) -> AgentResponse:
+        """
+        Public entry point for executing agent requests through the orchestrator.
+        Delegates the execution to route_request.
+
+        Args:
+            request: Standardized agent request containing metadata and payload.
+
+        Returns:
+            Standardized agent response containing consolidated execution results.
+        """
+        session_id = (request.payload or {}).get("session_id", "<no-session>")
+        history_len = len((request.payload or {}).get("conversation_history", []))
+        logger.info(
+            "Orchestrator executing | user_id=%s | agent=%s | session_id=%s | history_entries=%d",
+            request.user_id,
+            request.agent,
+            session_id,
+            history_len,
+        )
+        return await self.route_request(request)
+
     async def route_request(self, request: AgentRequest) -> AgentResponse:
         """
         Receive an AgentRequest, detect the appropriate agent(s) based on user query,
         execute sequentially, and return the aggregated results.
+        Falls back to the general Gemini handler when no domain keyword matches.
 
         Args:
             request: Standardized agent request containing metadata and payload.
@@ -193,10 +273,15 @@ class AntigravityOrchestrator:
         if not query:
             raise AgentExecutionError("Request payload is missing the required 'query' field.")
 
-        # 1. Detect matching agent intents
+        # 1. Detect matching agent intents (empty list = use general fallback)
         agent_names = self._detect_all_intents(query)
 
-        # 2. Single Agent Path
+        # 2. General fallback path — no domain keywords matched
+        if not agent_names:
+            logger.info("Routing request to general fallback handler.")
+            return await self._handle_general_query(request)
+
+        # 3. Single-agent path
         if len(agent_names) == 1:
             agent_name = agent_names[0]
             logger.info("Routing request to single agent: '%s'", agent_name)
@@ -209,7 +294,7 @@ class AntigravityOrchestrator:
                 logger.error("Single agent '%s' failed to execute: %s", agent_name, exc)
                 raise AgentExecutionError(f"Agent '{agent_name}' failed to execute: {exc}") from exc
 
-        # 3. Multi-Agent Path: Execute sequentially
+        # 4. Multi-agent path: Execute sequentially
         logger.info("Routing request to multiple agents sequentially: %s", agent_names)
         responses: list[AgentResponse] = []
         execution_errors: list[Exception] = []
@@ -230,10 +315,10 @@ class AntigravityOrchestrator:
                     AgentExecutionError(f"Agent '{agent_name}' failed to execute: {exc}")
                 )
 
-        # 4. Collect successful responses
+        # 5. Collect successful responses
         successful_responses = self._collect_responses(responses)
 
-        # 5. Fallback/Error handling: fail only if ALL selected agents fail
+        # 6. Fail only if ALL selected agents fail; otherwise return partial success
         if not successful_responses:
             error_details = "; ".join(str(err) for err in execution_errors)
             logger.error("All matched agents failed to execute: %s", error_details)
@@ -241,7 +326,6 @@ class AntigravityOrchestrator:
                 f"All selected agents failed to execute. Details: {error_details}"
             )
 
-        # Return a simple wrapper response (No final response aggregation logic yet)
         contributing_agents = [resp.agent for resp in successful_responses]
         combined_message = " | ".join(
             resp.message for resp in successful_responses if resp.message

@@ -33,3 +33,36 @@ class AIReasoningEngine:
             raise
         except Exception as exc:
             raise AgentExecutionError(f"AI reasoning engine encountered an error: {exc}") from exc
+
+    async def reason_with_history(self, prompt: str, history: list[dict]) -> str:
+        """
+        Evaluate a prompt in the context of prior conversation history.
+
+        Delegates to GeminiClient.generate_with_history() which uses the Gemini
+        ChatSession API so the model can resolve pronouns and references across turns
+        (e.g. "Move it to 7 PM" after "Add a gym session at 6 PM").
+
+        Args:
+            prompt:  The current user message / reasoning task.
+            history: Ordered list of prior turns in Gemini format:
+                     [{"role": "user"|"model", "parts": ["<text>"]}, ...]
+                     Pass an empty list for a fresh session.
+
+        Returns:
+            The text response from the model.
+
+        Raises:
+            AgentExecutionError: If the prompt is invalid or the client execution fails.
+        """
+        if not prompt or not prompt.strip():
+            raise AgentExecutionError("Reasoning prompt cannot be empty.")
+
+        try:
+            return await self.gemini_client.generate_with_history(prompt, history or [])
+        except AgentExecutionError:
+            raise
+        except Exception as exc:
+            raise AgentExecutionError(
+                f"AI reasoning engine (history-aware) encountered an error: {exc}"
+            ) from exc
+

@@ -6,7 +6,7 @@ AGENT_TRAVEL = "travel"
 AGENT_WELLNESS = "wellness"
 
 # Default Model Configuration
-DEFAULT_GEMINI_MODEL = "gemini-1.5-pro"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 # Default Timeouts (in seconds)
 DEFAULT_REQUEST_TIMEOUT = 30
