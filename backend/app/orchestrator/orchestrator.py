@@ -78,7 +78,10 @@ class AntigravityOrchestrator:
                 "mental health", "meditate", "meditation", "exercise", "workout",
                 "yoga", "breathe", "breathing", "sleep", "tired", "exhausted",
                 "relax", "relaxation", "well-being", "wellbeing", "feeling",
-                "emotions", "burn out", "burnout", "self care", "self-care"
+                "emotions", "burn out", "burnout", "self care", "self-care",
+                "water", "drink", "litres", "hydrate", "hydration", "calories",
+                "diet", "nutrition", "goal", "track", "tracker", "habit", "habits",
+                "activity", "activities", "steps", "running", "jogging", "walking", "fitness"
             ]
         }
 
@@ -96,6 +99,7 @@ class AntigravityOrchestrator:
         Raises:
             AgentExecutionError: If no appropriate agents are matched in the query.
         """
+        import re
         normalized_query = query.lower()
         matched_agents: list[str] = []
 
@@ -111,7 +115,15 @@ class AntigravityOrchestrator:
         for agent_name in priority_order:
             keywords = self._keyword_map.get(agent_name, [])
             for kw in keywords:
-                if kw in normalized_query:
+                # Use word boundaries to avoid substring matching issues (e.g. "goa" matching "goal")
+                if kw.isalnum():
+                    pattern = rf"\b{re.escape(kw)}\b"
+                else:
+                    start_boundary = r"\b" if kw[0].isalnum() else ""
+                    end_boundary = r"\b" if kw[-1].isalnum() else ""
+                    pattern = f"{start_boundary}{re.escape(kw)}{end_boundary}"
+
+                if re.search(pattern, normalized_query):
                     matched_agents.append(agent_name)
                     break  # Stop checking keywords for this agent once matched
 

@@ -16,7 +16,7 @@ import ReminderAlertDialog from '../components/ui/ReminderAlertDialog';
 import { getFirebaseAuth } from '../services/authService';
 import { fetchChatSessions, deleteChatSession, saveChatMessage, updateChatSessionMetadata, sendChatMessage, fetchChatMessages } from '../services/chatService';
 import { chatActionHandler } from '../services/chatActionHandler';
-import { getFirestore, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import DeleteConfirmationModal from '../components/dashboard/DeleteConfirmationModal';
 import { subscribeDashboardData } from '../services/dashboardEngine';
 import NotificationDrawer from '../components/notifications/NotificationDrawer';
@@ -110,13 +110,13 @@ function Dashboard() {
   }, [currentUser]);
 
   // Helper to query and refresh conversations list from Firestore
-  const refreshConversations = async (userId, newActiveId = null) => {
+  const refreshConversations = async (userId, newActiveId = null, selectDefault = false) => {
     try {
       const sessions = await fetchChatSessions(userId);
       setConversations(sessions);
       if (newActiveId) {
         setActiveConvId(newActiveId);
-      } else if (sessions.length > 0 && !activeConvId) {
+      } else if (selectDefault && sessions.length > 0 && !activeConvId) {
         setActiveConvId(sessions[0].id);
       }
     } catch (err) {
@@ -269,6 +269,37 @@ function Dashboard() {
 
   const unreadCount = notifications.filter((n) => !n.read).length;
 
+  // Handle manual rename of a conversation
+  const handleRenameConv = async (conversation) => {
+    const newTitle = prompt('Enter a new title for this conversation:', conversation.title);
+    if (newTitle === null) return; // User cancelled
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+
+    try {
+      const db = getFirestore();
+      const sessionRef = doc(db, 'users', currentUser.uid, 'chat_sessions', conversation.id);
+      await updateDoc(sessionRef, {
+        title: trimmed,
+        title_manually_set: true,
+      });
+
+      // Update state locally
+      setConversations((prev) =>
+        prev.map((c) => (c.id === conversation.id ? { ...c, title: trimmed } : c))
+      );
+
+      import('../components/ui/ToastManager').then(({ showToast }) => {
+        showToast('Conversation renamed successfully.', 'success');
+      });
+    } catch (err) {
+      console.error('Failed to rename chat:', err);
+      import('../components/ui/ToastManager').then(({ showToast }) => {
+        showToast('Unable to rename conversation. Please try again.', 'error');
+      });
+    }
+  };
+
   // Build the sidebar props bundle to pass down
   const sidebarProps = {
     conversations,
@@ -276,9 +307,7 @@ function Dashboard() {
     loadingChats,
     onNewChat: handleNewChat,
     onSelectConv: handleSelectConv,
-    onRenameConv: () => {
-      /* Not implemented in this sprint task */
-    },
+    onRenameConv: handleRenameConv,
     onDeleteConv: handleDeleteClick,
   };
 
@@ -374,7 +403,7 @@ function Dashboard() {
       if (isFirstMessage) {
         const db = getFirestore();
         const sessionRef = doc(db, 'users', currentUser.uid, 'chat_sessions', chatResponse.session_id);
-        const title = trimmed.length > 40 ? trimmed.substring(0, 37) + '...' : trimmed;
+        const title = chatResponse.session_title || (trimmed.length > 40 ? trimmed.substring(0, 37) + '...' : trimmed);
 
         await setDoc(sessionRef, {
           title,
@@ -441,7 +470,7 @@ function Dashboard() {
       >
         <div className="flex-1 flex flex-col min-h-0 relative h-full">
           {/* Chat History */}
-          <ChatPanel messages={messages} loadingHistory={loadingHistory} />
+          <ChatPanel messages={messages} loadingHistory={loadingHistory} onSuggestionClick={handleSendMessage} />
           
           {/* Docked Command Bar */}
           <CommandBar
