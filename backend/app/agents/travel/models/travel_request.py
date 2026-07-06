@@ -5,38 +5,39 @@ from pydantic import BaseModel, Field, validator
 
 class TravelRequest(BaseModel):
     """Pydantic model representing the input payload sent to the Travel Agent."""
-    destination: str = Field(..., description="The travel destination. Cannot be empty.")
-    budget: float = Field(..., description="The total travel budget in the user's currency. Must be positive.")
-    start_date: date = Field(..., description="The trip start date.")
-    end_date: date = Field(..., description="The trip end date.")
-    traveler_count: int = Field(default=1, description="Number of travelers. Must be at least 1.")
-    preferences: Optional[str] = Field(default=None, description="Optional travel preferences (e.g., adventure, relaxation, food).")
+    query: str = Field(..., description="The user's query or instruction.")
+    destination: Optional[str] = Field(default=None, description="The travel destination.")
+    budget: Optional[float] = Field(default=None, description="The total travel budget in the user's currency.")
+    start_date: Optional[date] = Field(default=None, description="The trip start date.")
+    end_date: Optional[date] = Field(default=None, description="The trip end date.")
+    traveler_count: Optional[int] = Field(default=1, description="Number of travelers. Must be at least 1.")
+    preferences: Optional[str] = Field(default=None, description="Optional travel preferences.")
 
     @validator("destination")
-    def destination_not_empty(cls, v: str) -> str:
-        """Ensure the destination is not empty or whitespace."""
-        if not v or not v.strip():
+    def destination_not_empty(cls, v: Optional[str]) -> Optional[str]:
+        """Ensure the destination is not empty if provided."""
+        if v is not None and not v.strip():
             raise ValueError("Destination cannot be empty or whitespace.")
-        return v.strip()
+        return v.strip() if v else None
 
     @validator("budget")
-    def budget_must_be_positive(cls, v: float) -> float:
-        """Ensure the budget is a positive value."""
-        if v <= 0:
+    def budget_must_be_positive(cls, v: Optional[float]) -> Optional[float]:
+        """Ensure the budget is positive if provided."""
+        if v is not None and v <= 0:
             raise ValueError("Budget must be greater than zero.")
         return v
 
     @validator("traveler_count")
-    def traveler_count_must_be_valid(cls, v: int) -> int:
-        """Ensure at least one traveler is specified."""
-        if v < 1:
+    def traveler_count_must_be_valid(cls, v: Optional[int]) -> Optional[int]:
+        """Ensure traveler count is valid if provided."""
+        if v is not None and v < 1:
             raise ValueError("Traveler count must be at least 1.")
         return v
 
     @validator("end_date")
-    def end_date_must_be_after_start_date(cls, v: date, values: dict) -> date:
-        """Ensure end date is on or after start date."""
+    def end_date_must_be_after_start_date(cls, v: Optional[date], values: dict) -> Optional[date]:
+        """Ensure end date is on or after start date if both are provided."""
         start_date = values.get("start_date")
-        if start_date and v < start_date:
+        if start_date and v and v < start_date:
             raise ValueError("end_date must be on or after start_date.")
         return v

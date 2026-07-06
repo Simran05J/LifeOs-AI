@@ -1,4 +1,5 @@
 import logging
+from datetime import date
 from app.agents.shared.base_agent import BaseAgent
 from app.agents.shared.models import AgentRequest, AgentResponse
 from app.agents.shared.exceptions import AgentExecutionError
@@ -335,5 +336,6 @@ class AntigravityOrchestrator:
             success=True,
             agent=", ".join(contributing_agents),
             data={"responses": [resp.data for resp in successful_responses]},
-            message=combined_message
+            message=combined_message,
+            actions_executed=None
         )

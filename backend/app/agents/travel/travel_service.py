@@ -47,25 +47,44 @@ class TravelService:
             raise AgentValidationError(f"Invalid travel request: {exc}") from exc
 
         # Calculate trip duration
-        trip_duration = (validated_request.end_date - validated_request.start_date).days + 1
+        trip_duration = 0
+        if validated_request.start_date and validated_request.end_date:
+            trip_duration = (validated_request.end_date - validated_request.start_date).days + 1
+
+        time_context = payload.get("time_context") or f"Current Date: {validated_request.start_date or ''}"
+        timezone_str = payload.get("timezone", "Asia/Kolkata")
+        existing_trips = payload.get("existing_trips") or []
+        existing_trips_str = "\n".join(
+            [
+                f"- ID: {trip.get('id')}, Destination: {trip.get('destination')}, Budget: {trip.get('budget')}, Dates: {trip.get('startDate')} to {trip.get('endDate')}, Status: {trip.get('status')}"
+                for trip in existing_trips
+            ]
+        ) if existing_trips else "No existing trips."
 
         # Construct prompt
-        preferences_str = validated_request.preferences or "No specific preferences provided."
         prompt = (
             f"You are the LifeOS AI Travel Agent.\n"
-            f"Your job is to create a comprehensive travel plan for the user.\n\n"
-            f"Trip Details:\n"
-            f"- Destination: {validated_request.destination}\n"
-            f"- Start Date: {validated_request.start_date}\n"
-            f"- End Date: {validated_request.end_date}\n"
-            f"- Duration: {trip_duration} day(s)\n"
-            f"- Number of Travelers: {validated_request.traveler_count}\n"
-            f"- Total Budget: {validated_request.budget}\n"
-            f"- Preferences: {preferences_str}\n\n"
-            f"Create a detailed travel plan and respond ONLY with a valid JSON object matching this structure:\n"
+            f"Your job is to manage the user's travel plans. You support CRUD operations (Create, Update, Delete, List).\n"
+            f"\n"
+            f"--- CURRENT TIME CONTEXT ---\n"
+            f"{time_context}\n"
+            f"Timezone: {timezone_str}\n"
+            f"---\n"
+            f"\n"
+            f"--- EXISTING TRIPS ---\n"
+            f"{existing_trips_str}\n"
+            f"---\n"
+            f"\n"
+            f"User Query: \"{validated_request.query}\"\n"
+            f"\n"
+            f"Determine the user's intent. If creating/planning, generating an itinerary is required. "
+            f"If updating/cancelling/deleting, look up the trip ID from the existing trips list and output a delete or update action.\n"
+            f"All output dates/times must be in the local timezone (YYYY-MM-DD).\n"
+            f"\n"
+            f"Respond ONLY with a valid JSON object:\n"
             f"{{\n"
             f"  \"success\": true,\n"
-            f"  \"destination\": \"Confirmed destination name\",\n"
+            f"  \"destination\": \"Confirmed destination name or null\",\n"
             f"  \"itinerary\": [\n"
             f"    {{\n"
             f"      \"day\": 1,\n"
@@ -86,9 +105,37 @@ class TravelService:
             f"  }},\n"
             f"  \"packing_list\": [\"Item 1\", \"Item 2\"],\n"
             f"  \"travel_tips\": [\"Tip 1\", \"Tip 2\"],\n"
-            f"  \"summary\": \"Overall summary of the travel plan.\"\n"
+            f"  \"summary\": \"A friendly, conversational, and natural response to the user. Summarize what you did (if you planned/updated/deleted a trip), or politely ask the user for details (such as destination, dates, budget) if they are missing. Speak like a helpful personal assistant.\",\n"
+            f"  \"actions\": [\n"
+            f"     {{\n"
+            f"        \"action\": \"create\" / \"update\" / \"delete\",\n"
+            f"        \"entity_type\": \"trip\",\n"
+            f"        \"entity_id\": \"trip-id-if-update-or-delete-else-null\",\n"
+            f"        \"data\": {{\n"
+            f"            \"destination\": \"string\",\n"
+            f"            \"budget\": 0.0,\n"
+            f"            \"start_date\": \"YYYY-MM-DD\",\n"
+            f"            \"end_date\": \"YYYY-MM-DD\",\n"
+            f"            \"itinerary\": [],\n"
+            f"            \"packing_list\": [],\n"
+            f"            \"status\": \"planned/ongoing/completed/cancelled\"\n"
+            f"        }}\n"
+            f"     }},\n"
+            f"     {{\n"
+            f"        \"action\": \"create\",\n"
+            f"        \"entity_type\": \"reminder\",\n"
+            f"        \"entity_id\": null,\n"
+            f"        \"data\": {{\n"
+            f"            \"title\": \"Departure for Goa Trip\",\n"
+            f"            \"description\": \"Don't forget the flight/trip start!\",\n"
+            f"            \"time\": \"YYYY-MM-DDTHH:MM:SS\",\n"
+            f"            \"priority\": \"high\",\n"
+            f"            \"is_completed\": false\n"
+            f"        }}\n"
+            f"     }}\n"
+            f"  ] or null\n"
             f"}}\n"
-            f"Do not add explanations, markdown code blocks, or extra text. Output only raw JSON."
+            f"Do not add explanations or markdown. Output only raw JSON."
         )
 
         try:
@@ -111,7 +158,8 @@ class TravelService:
                 estimated_budget=data.get("estimated_budget", {}),
                 packing_list=data.get("packing_list", []),
                 travel_tips=data.get("travel_tips", []),
-                summary=data.get("summary", "Travel plan generated successfully.")
+                summary=data.get("summary", "Travel plan processed."),
+                actions=data.get("actions")
             )
 
         except json.JSONDecodeError:

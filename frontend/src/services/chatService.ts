@@ -16,7 +16,19 @@
  *   — FastAPI also uses { detail: string } for HTTPException responses.
  */
 
-import type { ChatRequest, ChatResponse, SuccessResponse } from '../types/chat';
+import type { ChatRequest, ChatResponse, SuccessResponse, ChatMessage } from '../types/chat';
+import {
+  getFirestore,
+  collection,
+  query,
+  orderBy,
+  getDocs,
+  doc,
+  setDoc,
+  updateDoc,
+  increment,
+  serverTimestamp,
+} from 'firebase/firestore';
 
 const CHAT_ENDPOINT = '/api/v1/chat';
 
@@ -86,6 +98,15 @@ export async function sendChatMessage(
   const requestBody: ChatRequest = {
     message,
     ...(sessionId ? { session_id: sessionId } : {}),
+    // Send local wall-clock time so backend AI sees the user's actual current time.
+    // Do NOT use toISOString() which converts to UTC and confuses time-relative phrases.
+    local_time: (() => {
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    })(),
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    locale: Intl.DateTimeFormat().resolvedOptions().locale || 'en-IN',
   };
 
   // ── Network request ──────────────────────────────────────────────────────
@@ -130,3 +151,138 @@ export async function sendChatMessage(
 
   return successEnvelope.data;
 }
+
+// ── Firestore Database Loaders ───────────────────────────────────────────────
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  lastMessage: string;
+  startedAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Loads all chat sessions for the authenticated user from Firestore, ordered by updatedAt DESC.
+ */
+export async function fetchChatSessions(userId: string): Promise<ChatSession[]> {
+  const db = getFirestore();
+  const sessionsRef = collection(db, 'users', userId, 'chat_sessions');
+  const q = query(sessionsRef, orderBy('updated_at', 'desc'));
+  const querySnapshot = await getDocs(q);
+  const sessions: ChatSession[] = [];
+  querySnapshot.forEach((doc) => {
+    const data = doc.data();
+    sessions.push({
+      id: doc.id,
+      title: data.title || 'Untitled Chat',
+      lastMessage: data.last_message || '',
+      startedAt: data.started_at?.toDate().toISOString() || new Date().toISOString(),
+      updatedAt: data.updated_at?.toDate().toISOString() || new Date().toISOString(),
+    });
+  });
+  return sessions;
+}
+
+/**
+ * Loads all messages inside a specific chat session from Firestore, ordered by timestamp ASC.
+ */
+export async function fetchChatMessages(userId: string, sessionId: string): Promise<ChatMessage[]> {
+  const db = getFirestore();
+  const messagesRef = collection(db, 'users', userId, 'chat_sessions', sessionId, 'messages');
+  const q = query(messagesRef, orderBy('timestamp', 'asc'));
+  const querySnapshot = await getDocs(q);
+  const messages: ChatMessage[] = [];
+  querySnapshot.forEach((doc) => {
+    const data = doc.data();
+    const dateVal = data.timestamp?.toDate() || new Date();
+    const timeStr = dateVal.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    messages.push({
+      id: doc.id,
+      sender: data.sender === 'assistant' ? 'assistant' : 'user',
+      text: data.message || '',
+      time: timeStr,
+    });
+  });
+  return messages;
+}
+
+/**
+ * Saves a single message to the conversation's messages subcollection in Firestore.
+ */
+export async function saveChatMessage(
+  userId: string,
+  sessionId: string,
+  messageId: string,
+  sender: 'user' | 'assistant',
+  text: string
+): Promise<void> {
+  const db = getFirestore();
+  const msgRef = doc(db, 'users', userId, 'chat_sessions', sessionId, 'messages', messageId);
+  await setDoc(msgRef, {
+    sender,
+    role: sender,
+    message: text,
+    content: text,
+    timestamp: serverTimestamp(),
+  });
+}
+
+/**
+ * Updates the chat session's updatedAt, lastMessage, and messageCount in Firestore.
+ */
+export async function updateChatSessionMetadata(
+  userId: string,
+  sessionId: string,
+  lastMessage: string,
+  messageCountIncrement: number = 1
+): Promise<void> {
+  const db = getFirestore();
+  const sessionRef = doc(db, 'users', userId, 'chat_sessions', sessionId);
+  await updateDoc(sessionRef, {
+    last_message: lastMessage,
+    lastMessage: lastMessage,
+    updated_at: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    message_count: increment(messageCountIncrement),
+    messageCount: increment(messageCountIncrement),
+  });
+}
+
+/**
+ * Permanently deletes a chat session and all its nested messages via the backend.
+ *
+ * @param sessionId  Unique identifier of the session to delete.
+ * @throws           Error with a human-readable message on failure.
+ */
+export async function deleteChatSession(sessionId: string): Promise<void> {
+  const token = getAuthToken();
+  const endpoint = `${CHAT_ENDPOINT}/${sessionId}`;
+
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: 'DELETE',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+  } catch {
+    throw new Error(
+      'Unable to reach the LifeOS server. Please check your connection and try again.'
+    );
+  }
+
+  let envelope: { success?: boolean; message?: string } | ErrorEnvelope;
+  try {
+    envelope = await response.json();
+  } catch {
+    throw new Error(`Server returned an unreadable response (HTTP ${response.status}).`);
+  }
+
+  if (!response.ok) {
+    const message = extractErrorMessage(envelope as ErrorEnvelope, response.status);
+    throw new Error(message);
+  }
+}
+

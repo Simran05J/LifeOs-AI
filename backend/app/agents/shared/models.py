@@ -17,3 +17,4 @@ class AgentResponse(BaseModel):
     agent: str
     data: Optional[dict[str, Any]] = None
     message: Optional[str] = None
+    actions_executed: Optional[list[dict[str, Any]]] = None

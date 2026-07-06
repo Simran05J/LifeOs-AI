@@ -27,14 +27,27 @@ class TaskService:
         try:
             now = datetime.utcnow()
             data = task_data.model_dump()
+            
+            # Set compatibility fields for frontend dashboard (which expects startDate/endDate and completed)
+            due_date = data.get("due_date")
             data.update({
                 "id": task_id,
                 "user_id": user_id,
+                "startDate": due_date or now,
+                "start_date": due_date or now,
+                "endDate": due_date or now,
+                "end_date": due_date or now,
+                "completed": data.get("status") == "completed",
+                "source": data.get("source") or "ai",
+                # Write both camelCase and snake_case timestamps so frontend
+                # onSnapshot queries ordering by 'createdAt' work correctly.
+                "createdAt": now,
                 "created_at": now,
+                "updatedAt": now,
                 "updated_at": now
             })
             
-            set_document(TASK_COLLECTION, task_id, data)
+            set_document(f"users/{user_id}/planner", task_id, data)
             logger.info(f"Task {task_id} successfully created.")
             return TaskResponse(**data)
         except Exception as e:
@@ -48,7 +61,7 @@ class TaskService:
         """
         logger.info(f"Retrieving task {task_id} for user {user_id}")
         try:
-            doc = get_document(TASK_COLLECTION, task_id)
+            doc = get_document(f"users/{user_id}/planner", task_id)
             if not doc:
                 logger.info(f"Task {task_id} not found.")
                 return None
@@ -81,10 +94,10 @@ class TaskService:
                 return existing
                 
             update_dict["updated_at"] = now
-            update_document(TASK_COLLECTION, task_id, update_dict)
+            update_document(f"users/{user_id}/planner", task_id, update_dict)
             
             # Retrieve updated document
-            updated_doc = get_document(TASK_COLLECTION, task_id)
+            updated_doc = get_document(f"users/{user_id}/planner", task_id)
             logger.info(f"Task {task_id} successfully updated.")
             return TaskResponse(**updated_doc)
         except Exception as e:
@@ -103,7 +116,7 @@ class TaskService:
             if not existing:
                 raise ValueError("Task not found.")
                 
-            delete_document(TASK_COLLECTION, task_id)
+            delete_document(f"users/{user_id}/planner", task_id)
             logger.info(f"Task {task_id} successfully deleted.")
         except Exception as e:
             logger.error(f"Error deleting task {task_id}: {str(e)}")
@@ -116,7 +129,8 @@ class TaskService:
         """
         logger.info(f"Listing tasks for user: {user_id}")
         try:
-            docs = query_documents(TASK_COLLECTION, "user_id", "==", user_id)
+            from app.firebase.firebase import list_documents
+            docs = list_documents(f"users/{user_id}/planner")
             result = []
             for doc in docs:
                 try:
