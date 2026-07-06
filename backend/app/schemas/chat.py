@@ -32,3 +32,4 @@ class ChatResponse(BaseModel):
     response_id: str = Field(..., description="Unique ID for this specific message response")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Timestamp when the response was created")
     actions_executed: Optional[list[dict]] = Field(None, description="List of structured actions executed by the agent(s)")
+    session_title: Optional[str] = Field(None, description="Automatically generated title for the session, if it is a new conversation")

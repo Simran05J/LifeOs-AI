@@ -94,29 +94,68 @@ class ChatService:
 
         # ── Step 1: Resolve session ───────────────────────────────────────────
         incoming_sid = request.session_id
+        session_id = None
+        conversation_history = []
 
-        if incoming_sid and session_service.session_exists(incoming_sid):
-            # Existing session — retrieve accumulated history
-            session_id = incoming_sid
-            conversation_history = session_service.get_history(session_id)
-            logger.info(
-                "Session RESUMED  | session_id=%s | history_turns=%d",
-                session_id,
-                len(conversation_history),
-            )
-        else:
-            # New session (or expired) — create fresh
-            if incoming_sid:
+        if incoming_sid:
+            if session_service.session_exists(incoming_sid):
+                session_id = incoming_sid
+                conversation_history = session_service.get_history(session_id)
                 logger.info(
-                    "Session EXPIRED/UNKNOWN | incoming session_id=%s — creating new session.",
-                    incoming_sid,
+                    "Session RESUMED  | session_id=%s | history_turns=%d",
+                    session_id,
+                    len(conversation_history),
                 )
-            session_id = session_service.create_session(
-                user_id=user_id,
-                session_id=incoming_sid,  # Reuse caller-supplied ID if provided
-            )
+            else:
+                # Session not in memory. Try restoring from Firestore.
+                from app.firebase.firebase import get_db
+                db = get_db()
+                session_ref = db.collection("users").document(user_id).collection("chat_sessions").document(incoming_sid)
+                try:
+                    session_doc = session_ref.get()
+                except Exception as err:
+                    logger.error("Failed to query chat session %s from Firestore: %s", incoming_sid, err)
+                    session_doc = None
+
+                if session_doc and session_doc.exists:
+                    # Session exists in Firestore! Recreate in-process session.
+                    session_id = session_service.create_session(
+                        user_id=user_id,
+                        session_id=incoming_sid,
+                    )
+                    # Load messages subcollection ordered by timestamp asc
+                    try:
+                        messages_stream = session_ref.collection("messages").order_by("timestamp", direction="ASCENDING").stream()
+                        for m in messages_stream:
+                            m_data = m.to_dict()
+                            sender = m_data.get("sender") or m_data.get("role")
+                            text = m_data.get("message") or m_data.get("content") or ""
+                            if sender == "user":
+                                session_service._sessions[session_id]["history"].append({"role": "user", "parts": [text]})
+                            elif sender in ("assistant", "model"):
+                                session_service._sessions[session_id]["history"].append({"role": "model", "parts": [text]})
+                    except Exception as err:
+                        logger.error("Failed to load messages for session %s from Firestore: %s", incoming_sid, err)
+
+                    conversation_history = session_service.get_history(session_id)
+                    logger.info(
+                        "Session RESTORED from Firestore | session_id=%s | history_turns=%d",
+                        session_id,
+                        len(conversation_history),
+                    )
+                else:
+                    # Creating new session because it doesn't exist in Firestore
+                    session_id = session_service.create_session(
+                        user_id=user_id,
+                        session_id=incoming_sid,
+                    )
+                    conversation_history = []
+                    logger.info("Session NEW (expired/unknown id) | session_id=%s | user_id=%s", session_id, user_id)
+        else:
+            # No incoming session_id - create brand new session
+            session_id = session_service.create_session(user_id=user_id)
             conversation_history = []
-            logger.info("Session NEW      | session_id=%s | user_id=%s", session_id, user_id)
+            logger.info("Session NEW (no id) | session_id=%s | user_id=%s", session_id, user_id)
 
         # ── Step 2: Build AgentRequest ────────────────────────────────────────
         # local_time is sent as a naive ISO string (no Z / offset) representing the
@@ -245,13 +284,31 @@ class ChatService:
                 "Session SAVED    | session_id=%s | turn appended successfully.", session_id
             )
 
+            # Generate a session title if this is the first turn
+            session_title = None
+            if not conversation_history:
+                try:
+                    title_prompt = (
+                        "Generate a very short, clean title (2 to 4 words maximum, no quotes, no explanation, no prefixes) "
+                        f"summarizing this user query: '{request.message}'"
+                    )
+                    session_title = await orchestrator._reasoning_engine.reason(title_prompt)
+                    session_title = session_title.strip().strip('"').strip("'").strip("Title:").strip()
+                    # Clean up trailing punctuation
+                    session_title = re.sub(r'[.\s]+$', '', session_title)
+                    logger.info("Generated chat session title: %s", session_title)
+                except Exception as e:
+                    logger.warning("Failed to generate chat session title: %s", e)
+
             return ChatResponse(
                 message=response_text,
                 session_id=session_id,
                 response_id=str(uuid.uuid4()),
                 created_at=datetime.utcnow(),
                 actions_executed=actions if actions else None,
+                session_title=session_title
             )
+
 
         except AgentValidationError as exc:
             logger.warning(

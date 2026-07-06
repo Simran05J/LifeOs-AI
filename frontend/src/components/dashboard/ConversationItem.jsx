@@ -23,10 +23,10 @@ function formatRelativeTime(dateString) {
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-function ConversationItem({ conversation, isActive, onSelect, onDelete }) {
+function ConversationItem({ conversation, isActive, onSelect, onRename, onDelete }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
-
+  
   // Close dropdown on click outside or Escape press
   useEffect(() => {
     if (!menuOpen) return;
@@ -105,10 +105,14 @@ function ConversationItem({ conversation, isActive, onSelect, onDelete }) {
           <div className="absolute right-0 top-full mt-1 z-40 w-36 rounded-xl border border-white/10 bg-slate-900/95 p-1 shadow-xl backdrop-blur-md animate-fade-in">
             <button
               type="button"
-              disabled
-              className="w-full rounded-lg px-2.5 py-1.5 text-left text-[11px] font-semibold text-slate-500 cursor-not-allowed select-none"
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuOpen(false);
+                onRename?.(conversation);
+              }}
+              className="w-full rounded-lg px-2.5 py-1.5 text-left text-[11px] font-semibold text-slate-300 hover:bg-white/10 hover:text-white transition-all duration-150"
             >
-              Rename (Coming Soon)
+              Rename
             </button>
             <button
               type="button"
@@ -136,6 +140,7 @@ ConversationItem.propTypes = {
   }).isRequired,
   isActive: PropTypes.bool,
   onSelect: PropTypes.func,
+  onRename: PropTypes.func,
   onDelete: PropTypes.func,
 };
 
