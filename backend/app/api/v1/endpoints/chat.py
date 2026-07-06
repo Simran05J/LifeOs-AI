@@ -51,3 +51,40 @@ async def send_chat_message(
             detail="An unexpected error occurred while processing your message."
         )
 
+
+@router.delete("/{session_id}", response_model=SuccessResponse, status_code=status.HTTP_200_OK)
+async def delete_chat_session(
+    session_id: str,
+    current_user: AuthUser = Depends(get_current_user)
+) -> SuccessResponse:
+    """
+    Deletes a chat session and all its messages for the authenticated user.
+    """
+    logger.info("DELETE /api/v1/chat/%s called by user_id: %s", session_id, current_user.uid)
+    try:
+        await ChatService.delete_chat_session(session_id=session_id, user_id=current_user.uid)
+        return SuccessResponse(
+            success=True,
+            message="Conversation deleted successfully",
+            data=None
+        )
+    except PermissionError as exc:
+        logger.warning("Permission error for user %s on session %s: %s", current_user.uid, session_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc)
+        )
+    except ValueError as exc:
+        logger.warning("Value error for user %s on session %s: %s", current_user.uid, session_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc)
+        )
+    except Exception as exc:
+        logger.error("Unexpected error deleting session %s for user %s: %s", session_id, current_user.uid, exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while deleting the conversation."
+        )
+
+

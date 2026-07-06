@@ -20,16 +20,6 @@ class FinanceService:
         """
         Analyzes user financial logs and concerns using the AI reasoning engine,
         producing a structured FinanceResult.
-
-        Args:
-            request: The request payload (either FinanceRequest instance or dictionary).
-
-        Returns:
-            The structured FinanceResult containing parsed insights.
-
-        Raises:
-            AgentValidationError: If input validation fails.
-            AgentExecutionError: If AI reasoning or parsing fails.
         """
         # Validate request
         try:
@@ -45,21 +35,34 @@ class FinanceService:
             raise AgentValidationError(f"Invalid finance request: {exc}") from exc
 
         # Format expense records for the prompt
+        existing_expenses = payload.get("expense_records") or []
         expense_records_str = "\n".join(
             [
-                f"- Date: {rec.date}, Amount: {rec.amount}, Category: {rec.category}, Merchant: {rec.merchant or 'N/A'}, Description: {rec.description or 'None'}"
-                for rec in validated_request.expense_records
+                f"- ID: {rec.get('id')}, Date: {rec.get('transaction_date') or rec.get('transactionDate')}, Amount: {rec.get('amount')}, Category: {rec.get('category')}, Description: {rec.get('description') or rec.get('title') or 'None'}"
+                for rec in existing_expenses
             ]
-        ) if validated_request.expense_records else "No transaction records provided."
+        ) if existing_expenses else "No transaction records provided."
+
+        time_context = payload.get("time_context") or "Current Date: Unknown"
+        timezone_str = payload.get("timezone", "Asia/Kolkata")
 
         # Construct prompt
         prompt = (
             f"You are the LifeOS AI Finance Agent.\n"
-            f"Your job is to analyze the user's spending habits, answer their query, and suggest a budget.\n"
-            f"User Query: \"{validated_request.query}\"\n\n"
-            f"Here are the user's transactions:\n"
-            f"{expense_records_str}\n\n"
-            f"Analyze this data and respond ONLY with a valid JSON object matching the following structure:\n"
+            f"Your job is to manage the user's financial logs (expenses/income). You support CRUD operations (Create, Update, Delete, List).\n"
+            f"\n"
+            f"--- CURRENT TIME CONTEXT ---\n"
+            f"{time_context}\n"
+            f"Timezone: {timezone_str}\n"
+            f"---\n"
+            f"\n"
+            f"--- USER'S TRANSACTIONS ---\n"
+            f"{expense_records_str}\n"
+            f"---\n"
+            f"\n"
+            f"User Query: \"{validated_request.query}\"\n"
+            f"\n"
+            f"Analyze this query and respond ONLY with a valid JSON object matching the following structure:\n"
             f"{{\n"
             f"  \"success\": true,\n"
             f"  \"expense_summary\": {{\n"
@@ -70,9 +73,36 @@ class FinanceService:
             f"  }},\n"
             f"  \"budget_recommendations\": [\"Tip 1\", \"Tip 2\"],\n"
             f"  \"spending_insights\": [\"Insight 1\", \"Insight 2\"],\n"
-            f"  \"summary\": \"Detailed analysis summary explaining the spending patterns.\"\n"
+            f"  \"summary\": \"A friendly, conversational, and natural response to the user. Summarize any logged, updated, or deleted transactions, or politely ask the user for details (such as amount, category, description) if their query is too vague to act upon.\",\n"
+            f"  \"logged_expense\": null,\n"
+            f"  \"actions\": [\n"
+            f"     {{\n"
+            f"        \"action\": \"create\" / \"update\" / \"delete\",\n"
+            f"        \"entity_type\": \"expense\",\n"
+            f"        \"entity_id\": \"expense-id-if-update-or-delete-else-null\",\n"
+            f"        \"data\": {{\n"
+            f"            \"amount\": 0.0,\n"
+            f"            \"category\": \"CategoryName\",\n"
+            f"            \"description\": \"Description of the spent money\",\n"
+            f"            \"payment_method\": \"Cash/Card\",\n"
+            f"            \"transaction_date\": \"YYYY-MM-DDTHH:MM:SS in local time\"\n"
+            f"        }}\n"
+            f"     }},\n"
+            f"     {{\n"
+            f"        \"action\": \"create\",\n"
+            f"        \"entity_type\": \"reminder\",\n"
+            f"        \"entity_id\": null,\n"
+            f"        \"data\": {{\n"
+            f"            \"title\": \"Pay Monthly Electricity Bill\",\n"
+            f"            \"description\": \"Electricity bill payment deadline reminder\",\n"
+            f"            \"time\": \"YYYY-MM-DDTHH:MM:SS\" (in local time),\n"
+            f"            \"priority\": \"medium\",\n"
+            f"            \"is_completed\": false\n"
+            f"        }}\n"
+            f"     }}\n"
+            f"  ] or null\n"
             f"}}\n"
-            f"Do not add any explanations, markdown code blocks, or extra text. Output only raw JSON."
+            f"Do not add any explanations or markdown. Output only raw JSON."
         )
 
         try:
@@ -93,7 +123,9 @@ class FinanceService:
                 expense_summary=data.get("expense_summary", {}),
                 budget_recommendations=data.get("budget_recommendations", []),
                 spending_insights=data.get("spending_insights", []),
-                summary=data.get("summary", "Finance analysis completed successfully.")
+                summary=data.get("summary", "Finance analysis completed successfully."),
+                logged_expense=data.get("logged_expense"),
+                actions=data.get("actions")
             )
 
         except json.JSONDecodeError:

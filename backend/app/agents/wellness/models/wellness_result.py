@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Field
+from typing import Optional, Any
 
 
 class WellnessResult(BaseModel):
@@ -9,3 +10,5 @@ class WellnessResult(BaseModel):
     healthy_routine: list[str] = Field(default_factory=list, description="Suggested daily healthy routine steps.")
     wellness_tips: list[str] = Field(default_factory=list, description="General wellness tips tailored to the user's context.")
     summary: str = Field(default="", description="Overall textual summary of the wellness guidance provided.")
+    logged_activity: Optional[dict[str, Any]] = Field(default=None, description="Details of wellness activity logged, if any.")
+    actions: Optional[list[dict[str, Any]]] = Field(default=None, description="CRUD actions to execute.")

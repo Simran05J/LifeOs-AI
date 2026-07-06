@@ -11,3 +11,4 @@ class TravelResult(BaseModel):
     packing_list: list[str] = Field(default_factory=list, description="Recommended items to pack for the trip.")
     travel_tips: list[str] = Field(default_factory=list, description="General travel tips specific to the destination.")
     summary: str = Field(default="", description="Textual summary of the generated travel plan.")
+    actions: Optional[list[dict[str, Any]]] = Field(default=None, description="CRUD actions to execute.")

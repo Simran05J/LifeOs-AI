@@ -27,14 +27,36 @@ class ReminderService:
         try:
             now = datetime.utcnow()
             data = reminder_data.model_dump()
+            
+            # Format time/date for frontend compatibility
+            remind_at = reminder_data.remind_at
+            date_str = remind_at.strftime("%Y-%m-%d")
+            time_str = remind_at.strftime("%H:%M:%S")
+            
             data.update({
                 "id": reminder_id,
                 "user_id": user_id,
+                "date": date_str,
+                "time": time_str,
+                "startDate": date_str,
+                "start_date": date_str,
+                "remindAt": remind_at,
+                "completed": data.get("is_completed", False),
+                "source": "ai",
+                "voiceCreated": True,
+                "agentGenerated": True,
+                "voiceNotification": True,
+                "notificationEnabled": True,
+                "browserNotification": True,
+                # Write both camelCase and snake_case timestamps so the frontend
+                # onSnapshot query ordering by 'createdAt' works correctly.
+                "createdAt": now,
                 "created_at": now,
+                "updatedAt": now,
                 "updated_at": now
             })
             
-            set_document(REMINDER_COLLECTION, reminder_id, data)
+            set_document(f"users/{user_id}/reminders", reminder_id, data)
             logger.info(f"Reminder {reminder_id} successfully created.")
             return ReminderResponse(**data)
         except Exception as e:
@@ -48,7 +70,7 @@ class ReminderService:
         """
         logger.info(f"Retrieving reminder {reminder_id} for user {user_id}")
         try:
-            doc = get_document(REMINDER_COLLECTION, reminder_id)
+            doc = get_document(f"users/{user_id}/reminders", reminder_id)
             if not doc:
                 logger.info(f"Reminder {reminder_id} not found.")
                 return None
@@ -81,10 +103,10 @@ class ReminderService:
                 return existing
                 
             update_dict["updated_at"] = now
-            update_document(REMINDER_COLLECTION, reminder_id, update_dict)
+            update_document(f"users/{user_id}/reminders", reminder_id, update_dict)
             
             # Retrieve updated document
-            updated_doc = get_document(REMINDER_COLLECTION, reminder_id)
+            updated_doc = get_document(f"users/{user_id}/reminders", reminder_id)
             logger.info(f"Reminder {reminder_id} successfully updated.")
             return ReminderResponse(**updated_doc)
         except Exception as e:
@@ -103,7 +125,7 @@ class ReminderService:
             if not existing:
                 raise ValueError("Reminder not found.")
                 
-            delete_document(REMINDER_COLLECTION, reminder_id)
+            delete_document(f"users/{user_id}/reminders", reminder_id)
             logger.info(f"Reminder {reminder_id} successfully deleted.")
         except Exception as e:
             logger.error(f"Error deleting reminder {reminder_id}: {str(e)}")
@@ -116,7 +138,8 @@ class ReminderService:
         """
         logger.info(f"Listing reminders for user: {user_id}")
         try:
-            docs = query_documents(REMINDER_COLLECTION, "user_id", "==", user_id)
+            from app.firebase.firebase import list_documents
+            docs = list_documents(f"users/{user_id}/reminders")
             result = []
             for doc in docs:
                 try:

@@ -1,74 +1,110 @@
 /**
- * Chat.tsx — Self-contained AI chat component for LifeOS AI.
+ * Chat.tsx — Conversation-first AI chat workspace for LifeOS AI.
  *
- * Integrates with: frontend/src/services/chatService.ts → POST /api/v1/chat
- *
- * Props:
- *   initialMessages  – seed messages shown before the user sends anything
- *   sessionId        – optional session ID to continue an existing conversation
- *   className        – optional extra class for the root container
- *
- * The component preserves ALL existing styling tokens (violet/slate palette,
- * rounded-2xl bubbles, scrollbar-thin, etc.) and does NOT redesign the UI.
+ * Implements a centered, clean layout inspired by ChatGPT/Claude:
+ *   - Chat log messages permanently stored and loaded from Firestore
+ *   - User messages saved immediately before AI call completes
+ *   - AI responses saved upon successful API promise resolution
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Send, Mic } from 'lucide-react';
-import { sendChatMessage } from '../../services/chatService';
+import { getFirestore, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { getFirebaseAuth } from '../../services/authService';
+import {
+  sendChatMessage,
+  fetchChatMessages,
+  saveChatMessage,
+  updateChatSessionMetadata,
+} from '../../services/chatService';
 import type { ChatMessage } from '../../types/chat';
-
-// ─── helpers ────────────────────────────────────────────────────────────────
+import MessageList from './MessageList';
+import ChatComposer from './ChatComposer';
+import { chatActionHandler } from '../../services/chatActionHandler';
 
 function nowTime(): string {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-// ─── types ───────────────────────────────────────────────────────────────────
-
 interface ChatProps {
   initialMessages?: ChatMessage[];
   sessionId?: string | null;
   className?: string;
+  onConversationCreated?: (newSessionId: string) => void;
 }
 
-// ─── default seed messages ────────────────────────────────────────────────────
-
-const DEFAULT_MESSAGES: ChatMessage[] = [
-  { id: 1, sender: 'assistant', text: 'Hello 👋  I am your LifeOS AI assistant.', time: nowTime() },
-  { id: 2, sender: 'assistant', text: 'How can I help you today?', time: nowTime() },
-];
-
-// ─── component ───────────────────────────────────────────────────────────────
+const DEFAULT_MESSAGES: ChatMessage[] = [];
 
 export default function Chat({
   initialMessages = DEFAULT_MESSAGES,
-  sessionId: initialSessionId = null,
+  sessionId = null,
   className = '',
+  onConversationCreated,
 }: ChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [inputVal, setInputVal] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingMessages, setLoadingMessages] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Track session across turns so the backend can maintain context
-  const sessionIdRef = useRef<string | null>(initialSessionId);
+  const sessionIdRef = useRef<string | null>(sessionId);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Auth user state
+  const [currentUser, setCurrentUser] = useState<any>(null);
+
+  useEffect(() => {
+    const auth = getFirebaseAuth();
+    const unsubscribe = auth.onAuthStateChanged((user) => {
+      setCurrentUser(user);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Sync ref with prop changes
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
+
+  // Load chat messages asynchronously from Firestore on selection
+  useEffect(() => {
+    const auth = getFirebaseAuth();
+    const unsubscribe = auth.onAuthStateChanged(async (user) => {
+      if (user && sessionId) {
+        setLoadingMessages(true);
+        setError(null);
+        try {
+          const msgs = await fetchChatMessages(user.uid, sessionId);
+          setMessages(msgs);
+        } catch (err) {
+          console.error('Failed to load chat messages:', err);
+          setError('Failed to load conversation history.');
+        } finally {
+          setLoadingMessages(false);
+        }
+      } else {
+        setMessages([]);
+        setLoadingMessages(false);
+      }
+    });
+    return () => unsubscribe();
+  }, [sessionId]);
 
   // Auto-scroll to the latest message
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isLoading]);
+    if (!loadingMessages) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, isLoading, loadingMessages]);
 
-  const handleSend = async (e?: React.FormEvent) => {
+  const handleSend = async (e?: React.FormEvent, promptValue?: string) => {
     e?.preventDefault();
-    const trimmed = inputVal.trim();
-    if (!trimmed || isLoading) return;
+    const finalVal = promptValue !== undefined ? promptValue : inputVal;
+    const trimmed = finalVal.trim();
+    if (!trimmed || isLoading || loadingMessages || !currentUser) return;
 
-    // Clear any previous error
     setError(null);
 
-    // Optimistically append the user bubble
     const userMsg: ChatMessage = {
-      id: Date.now(),
+      id: `user-${Date.now()}`,
       sender: 'user',
       text: trimmed,
       time: nowTime(),
@@ -77,11 +113,29 @@ export default function Chat({
     setInputVal('');
     setIsLoading(true);
 
-    try {
-      const chatResponse = await sendChatMessage(trimmed, sessionIdRef.current);
-      // Persist session ID for subsequent messages
-      sessionIdRef.current = chatResponse.session_id;
+    const isFirstMessage = !sessionIdRef.current;
 
+    try {
+      // Save User message immediately to Firestore if session is active (non-blocking for AI call)
+      if (!isFirstMessage) {
+        const activeSessionId = sessionIdRef.current!;
+        try {
+          await saveChatMessage(currentUser.uid, activeSessionId, userMsg.id.toString(), 'user', trimmed);
+          await updateChatSessionMetadata(currentUser.uid, activeSessionId, trimmed, 1);
+        } catch (dbErr) {
+          console.error('Failed to save user message to Firestore:', dbErr);
+          // Don't crash the UI; keep trying to fetch the AI response
+        }
+      }
+
+      // Send message to backend API to trigger AI processing and get session ID
+      const chatResponse = await sendChatMessage(trimmed, sessionIdRef.current);
+      
+      // Process backend actions/side-effects reactively
+      if (chatResponse.actions_executed) {
+        chatActionHandler.processActions(currentUser.uid, chatResponse.actions_executed);
+      }
+      
       const aiMsg: ChatMessage = {
         id: chatResponse.response_id,
         sender: 'assistant',
@@ -89,6 +143,47 @@ export default function Chat({
         time: nowTime(),
       };
       setMessages((prev) => [...prev, aiMsg]);
+
+      // If this is the first message, create the Firestore session document and save both messages
+      if (isFirstMessage) {
+        const db = getFirestore();
+        const sessionRef = doc(db, 'users', currentUser.uid, 'chat_sessions', chatResponse.session_id);
+        const title = trimmed.length > 40 ? trimmed.substring(0, 37) + '...' : trimmed;
+
+        // Save session document
+        await setDoc(sessionRef, {
+          title,
+          started_at: serverTimestamp(),
+          created_at: serverTimestamp(),
+          createdAt: serverTimestamp(),
+          last_message: chatResponse.message,
+          lastMessage: chatResponse.message,
+          updated_at: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          message_count: 2,
+          messageCount: 2,
+        });
+
+        // Save both messages to the newly established session
+        await saveChatMessage(currentUser.uid, chatResponse.session_id, userMsg.id.toString(), 'user', trimmed);
+        await saveChatMessage(currentUser.uid, chatResponse.session_id, chatResponse.response_id, 'assistant', chatResponse.message);
+
+        // Notify Dashboard to refresh sidebar and select the new session
+        onConversationCreated?.(chatResponse.session_id);
+      } else {
+        // Save Assistant response and update session metadata
+        const activeSessionId = sessionIdRef.current!;
+        try {
+          await saveChatMessage(currentUser.uid, activeSessionId, chatResponse.response_id, 'assistant', chatResponse.message);
+          await updateChatSessionMetadata(currentUser.uid, activeSessionId, chatResponse.message, 1);
+        } catch (dbErr) {
+          console.error('Failed to save AI response to Firestore:', dbErr);
+        }
+      }
+
+      // Update session ID reference
+      sessionIdRef.current = chatResponse.session_id;
+
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : 'An unexpected error occurred. Please try again.';
@@ -98,89 +193,44 @@ export default function Chat({
     }
   };
 
+  const handlePromptClick = (promptText: string) => {
+    handleSend(undefined, promptText);
+  };
+
   return (
-    <div className={`flex flex-col h-full ${className}`}>
-      {/* ── Conversation Area ── */}
-      <div className="flex-1 overflow-y-auto space-y-4 mb-4 pr-1 scrollbar-thin">
-        {messages.map((msg) => {
-          const isAssistant = msg.sender === 'assistant';
-          return (
-            <div
-              key={msg.id}
-              className={`flex flex-col ${isAssistant ? 'items-start' : 'items-end'}`}
-            >
-              <div
-                className={`px-4 py-2.5 rounded-2xl text-sm ${
-                  isAssistant
-                    ? 'bg-white/5 border border-white/5 text-slate-200 rounded-tl-sm'
-                    : 'bg-violet-600/25 border border-violet-500/35 text-violet-100 rounded-tr-sm'
-                }`}
-              >
-                {msg.text}
-              </div>
-              <span className="text-[10px] text-slate-500 mt-1 px-1">{msg.time}</span>
-            </div>
-          );
-        })}
-
-        {/* ── Typing Indicator ── */}
-        {isLoading && (
-          <div className="flex flex-col items-start">
-            <div className="px-4 py-3 rounded-2xl rounded-tl-sm bg-white/5 border border-white/5">
-              <span className="flex gap-1 items-center">
-                {[0, 1, 2].map((i) => (
-                  <span
-                    key={i}
-                    className="block w-1.5 h-1.5 rounded-full bg-violet-400 animate-bounce"
-                    style={{ animationDelay: `${i * 0.15}s` }}
-                  />
-                ))}
-              </span>
-            </div>
+    <div className={`flex flex-col h-full ${className}`} role="log" aria-label="Chat Area">
+      {loadingMessages ? (
+        /* Sleek Loading Spinner */
+        <div className="flex-1 flex items-center justify-center select-none">
+          <div className="flex flex-col items-center gap-3">
+            <div className="h-7 w-7 animate-spin rounded-full border-2 border-violet-500/20 border-t-violet-500" />
+            <span className="text-[11px] text-slate-500 font-semibold tracking-wider uppercase">Loading conversation…</span>
           </div>
-        )}
-
-        {/* ── Error Banner ── */}
-        {error && (
-          <div
-            role="alert"
-            className="flex items-start gap-2 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
-          >
-            <span className="shrink-0 mt-0.5">⚠️</span>
-            <span>{error}</span>
-          </div>
-        )}
-
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* ── Input Composer ── */}
-      <form onSubmit={handleSend} className="relative flex items-center">
-        <button
-          type="button"
-          aria-label="Start voice typing"
-          className="absolute left-4 text-slate-400 hover:text-violet-400 transition cursor-pointer"
-        >
-          <Mic size={16} />
-        </button>
-        <input
-          type="text"
-          value={inputVal}
-          onChange={(e) => setInputVal(e.target.value)}
-          placeholder={isLoading ? 'Waiting for response…' : 'Ask me anything…'}
-          disabled={isLoading}
-          aria-label="Message text"
-          className="w-full h-11 pl-11 pr-11 rounded-full bg-slate-900/90 border border-white/5 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-500/80 focus:ring-2 focus:ring-violet-500/20 transition-all duration-200 disabled:opacity-50"
+        </div>
+      ) : (
+        <MessageList
+          messages={messages}
+          isLoading={isLoading}
+          error={error}
+          messagesEndRef={messagesEndRef}
+          onPromptClick={handlePromptClick}
         />
-        <button
-          type="submit"
-          disabled={isLoading || !inputVal.trim()}
-          aria-label="Send message"
-          className="absolute right-4 text-violet-400 hover:text-violet-300 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <Send size={16} />
-        </button>
-      </form>
+      )}
+
+      <ChatComposer
+        inputVal={inputVal}
+        setInputVal={setInputVal}
+        onSubmit={handleSend}
+        isLoading={isLoading || loadingMessages}
+        onVoiceToggle={() => {
+          /* Speech to Text trigger ready */
+        }}
+        onAttach={() => {
+          /* File Attachment trigger ready */
+        }}
+      />
     </div>
   );
 }
+export type { ChatProps };
+export { Chat };

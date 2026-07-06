@@ -23,6 +23,14 @@ import {
   type Auth,
   type UserCredential,
 } from 'firebase/auth';
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  serverTimestamp,
+} from 'firebase/firestore';
 
 // ---------------------------------------------------------------------------
 // Firebase configuration — read from Vite env vars
@@ -46,8 +54,56 @@ function getFirebaseApp(): FirebaseApp {
   return getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);
 }
 
-function getFirebaseAuth(): Auth {
+export function getFirebaseAuth(): Auth {
   return getAuth(getFirebaseApp());
+}
+
+// ---------------------------------------------------------------------------
+// Firestore user profile synchronisation
+// ---------------------------------------------------------------------------
+
+/**
+ * Automatically creates a Firestore user profile document if it does not exist.
+ * If the profile document exists, only the lastLogin timestamp is updated.
+ */
+export async function syncUserProfile(user: UserCredential['user']): Promise<void> {
+  try {
+    const db = getFirestore(getFirebaseApp());
+    const userRef = doc(db, 'users', user.uid);
+    const userDoc = await getDoc(userRef);
+
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
+    if (!userDoc.exists()) {
+      const displayName = user.displayName || 'LifeOS User';
+      await setDoc(userRef, {
+        uid: user.uid,
+        displayName: displayName,
+        email: user.email || '',
+        photoURL: user.photoURL || null,
+        workspaceName: `${displayName}'s Workspace`,
+        subscription: 'Free',
+        role: 'user',
+        status: 'active',
+        createdAt: serverTimestamp(),
+        lastLogin: serverTimestamp(),
+        preferences: {
+          theme: 'dark',
+          language: 'en',
+          timezone: timezone,
+        },
+      });
+    } else {
+      await updateDoc(userRef, {
+        lastLogin: serverTimestamp(),
+      });
+    }
+  } catch (err: unknown) {
+    console.error('Failed to sync Firestore user profile:', err);
+    throw new Error(
+      'Successfully authenticated with Google, but failed to synchronise your user profile. Please check your network and try again.'
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

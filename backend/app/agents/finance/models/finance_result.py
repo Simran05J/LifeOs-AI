@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 
@@ -9,3 +9,5 @@ class FinanceResult(BaseModel):
     budget_recommendations: list[str] = Field(default_factory=list, description="Recommended budget constraints or adjustments.")
     spending_insights: list[str] = Field(default_factory=list, description="Insights about spending habits and potential savings.")
     summary: str = Field(default="", description="Textual summary of the financial analysis.")
+    logged_expense: Optional[dict[str, Any]] = Field(default=None, description="Structured logged expense details, if any.")
+    actions: Optional[list[dict[str, Any]]] = Field(default=None, description="CRUD actions to execute.")

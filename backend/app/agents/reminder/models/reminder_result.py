@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 from pydantic import BaseModel, Field
 
 
@@ -11,3 +11,4 @@ class ReminderResult(BaseModel):
     reminder_time: Optional[datetime] = Field(default=None, description="The scheduled date and time for the reminder.")
     recurrence: Optional[str] = Field(default=None, description="Recurrence pattern (e.g., daily, weekly, or None).")
     summary: str = Field(default="", description="Textual summary of the parsing or processing result.")
+    actions: Optional[list[dict[str, Any]]] = Field(default=None, description="CRUD actions to execute.")

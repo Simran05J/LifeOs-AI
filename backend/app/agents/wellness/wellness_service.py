@@ -54,37 +54,74 @@ class WellnessService:
         goals_str = f"Wellness Goals: {validated_request.goals}" if validated_request.goals else "Wellness Goals: Not specified."
         preferences_str = f"Activity Preferences: {validated_request.preferences}" if validated_request.preferences else "Activity Preferences: None specified."
 
+        time_context = payload.get("time_context") or "Current Date: Unknown"
+        timezone_str = payload.get("timezone", "Asia/Kolkata")
+        existing_wellness = payload.get("existing_wellness") or []
+        existing_wellness_str = "\n".join(
+            [
+                f"- ID: {w.get('id')}, Category: {w.get('category')}, Target: {w.get('target')}, Current: {w.get('current')}, Unit: {w.get('unit')}, Frequency: {w.get('frequency')}, Title: {w.get('title') or 'N/A'}"
+                for w in existing_wellness
+            ]
+        ) if existing_wellness else "No wellness records provided."
+
         # Construct prompt
         prompt = (
             f"You are the LifeOS AI Wellness Agent.\n"
-            f"Your role is to provide empathetic, supportive, and evidence-based general wellness guidance.\n"
-            f"You do NOT diagnose or treat medical conditions.\n\n"
+            f"Your job is to manage the user's wellness logs and habits. You support CRUD operations (Create, Update, Delete, List).\n"
+            f"You do NOT diagnose or treat medical conditions.\n"
+            f"\n"
+            f"--- CURRENT TIME CONTEXT ---\n"
+            f"{time_context}\n"
+            f"Timezone: {timezone_str}\n"
+            f"---\n"
+            f"\n"
+            f"--- EXISTING WELLNESS RECORDS ---\n"
+            f"{existing_wellness_str}\n"
+            f"---\n"
+            f"\n"
             f"User Context:\n"
             f"- Message: \"{validated_request.user_message}\"\n"
             f"- {mood_str}\n"
             f"- {stress_str}\n"
             f"- {goals_str}\n"
             f"- {preferences_str}\n\n"
-            f"Analyze the user's wellness context and respond ONLY with a valid JSON object matching this structure:\n"
+            f"Analyze the user's request and respond ONLY with a valid JSON object matching this structure:\n"
             f"{{\n"
             f"  \"success\": true,\n"
             f"  \"mood_analysis\": \"Empathetic analysis of the user's emotional and mental state.\",\n"
             f"  \"recommendations\": [\n"
-            f"    \"Personalized activity or practice recommendation 1\",\n"
-            f"    \"Personalized activity or practice recommendation 2\"\n"
+            f"    \"Personalized activity or practice recommendation 1\"\n"
             f"  ],\n"
             f"  \"healthy_routine\": [\n"
-            f"    \"Morning: Suggested morning routine step\",\n"
-            f"    \"Afternoon: Suggested afternoon step\",\n"
-            f"    \"Evening: Suggested evening step\"\n"
+            f"    \"Suggested routine step\"\n"
             f"  ],\n"
             f"  \"wellness_tips\": [\n"
-            f"    \"General wellness tip 1\",\n"
-            f"    \"General wellness tip 2\"\n"
+            f"    \"General tip\"\n"
             f"  ],\n"
-            f"  \"summary\": \"Brief, supportive summary of guidance provided.\"\n"
+            f"  \"summary\": \"A friendly, conversational, and natural response to the user. Explain any wellness guidance or actions taken, or politely ask the user for clarification/details if needed.\",\n"
+            f"  \"logged_activity\": null,\n"
+            f"  \"actions\": [\n"
+            f"     {{\n"
+            f"        \"action\": \"create\" / \"update\" / \"delete\",\n"
+            f"        \"entity_type\": \"wellness\" / \"reminder\",\n"
+            f"        \"entity_id\": \"wellness-id-if-update-or-delete-else-null\",\n"
+            f"        \"data\": {{\n"
+            f"             \"title\": \"Activity name (e.g. Water Tracking)\",\n"
+            f"             \"category\": \"water/exercise/sleep/meditation/nutrition/custom\",\n"
+            f"             \"target\": 1.0,\n"
+            f"             \"current\": 0.0,\n"
+            f"             \"unit\": \"L/ml/min/hr/etc\",\n"
+            f"             \"frequency\": \"daily/weekly/monthly\",\n"
+            f"             \"notes\": \"any additional notes\",\n"
+            f"             \"description\": \"For reminders, a short description\",\n"
+            f"             \"time\": \"YYYY-MM-DDTHH:MM:SS (local time)\",\n"
+            f"             \"priority\": \"low/medium/high\",\n"
+            f"             \"is_completed\": false\n"
+            f"        }}\n"
+            f"     }}\n"
+            f"  ] or null\n"
             f"}}\n"
-            f"Do not add explanations, markdown code blocks, or extra text. Output only raw JSON."
+            f"Do not add explanations or markdown. Output only raw JSON."
         )
 
         try:
@@ -106,7 +143,9 @@ class WellnessService:
                 recommendations=data.get("recommendations", []),
                 healthy_routine=data.get("healthy_routine", []),
                 wellness_tips=data.get("wellness_tips", []),
-                summary=data.get("summary", "Wellness analysis completed successfully.")
+                summary=data.get("summary", "Wellness guidance generated."),
+                logged_activity=data.get("logged_activity"),
+                actions=data.get("actions")
             )
 
         except json.JSONDecodeError:
